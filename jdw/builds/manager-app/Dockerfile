@@ -16,7 +16,7 @@ RUN npm install -y -g npm@11 -D @swc/cli @swc/core
 
 WORKDIR /app
 EXPOSE 80 443
-ENV PORT=8080
+ENV PORT=80
 
 COPY ./entrypoint.sh /etc/entrypoint.sh
 RUN ["chmod", "+x", "/etc/entrypoint.sh"]
