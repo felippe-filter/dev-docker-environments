@@ -1,0 +1,322 @@
+networks:
+  jdw-local:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1380
+      com.docker.network.bridge.gateway_mode_ipv4: nat-unprotected
+    ipam:
+      config:
+        - subnet: 175.10.0.0/16
+
+volumes:
+  mysql.local:
+    driver: local
+  redis.local:
+    driver: local
+  dynamodb.local:
+    driver: local
+
+services:
+  ###
+  # Resources
+  ###
+
+  mysql:
+    image: mysql:8.4.7
+    container_name: mysql.jdw
+    hostname: mysql.jdw.local
+    restart: unless-stopped
+    tty: true
+    volumes:
+      - mysql.local:/var/lib/mysql
+      - .bash_history/.mysql_history:/root/.bash_history:delegated
+    #     - .config/mysqld/my.cnf:/etc/mysql/my.cnf:delegated
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.2
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+      MYSQL_ROOT_PASSWORD:
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_USER: user
+      MYSQL_PASSWORD:
+
+  redis:
+    image: redis:alpine
+    container_name: redis.jdw
+    hostname: redis.jdw.local
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis.local:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.4
+
+  dynamodb:
+    container_name: dynamodb.jdw
+    hostname: dynamodb.jdw.local
+    image: "amazon/dynamodb-local:3.1.0"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    user: root
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb.local:/home/dynamodblocal/data
+    working_dir: /home/dynamodblocal
+    healthcheck:
+      test: ["CMD-SHELL", '[ "$(curl -s -o /dev/null -I -w ''%{http_code}'' http://localhost:8000)" == "400" ]']
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.6
+
+
+  ###
+  # Services
+  ###
+
+  # Php Prj
+  proxy-cache:
+    container_name: proxy-cache.jdw
+    hostname: proxy.jdw.local
+    build:
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+      context: ./builds/proxy-cache
+    user: $USER_ID
+    volumes:
+      - $PROXY_PATH:/app:cached
+      - .bash_history/.proxy_history:/home/app/.bash_history:delegated
+      - ~/.config/composer:/root/.config/composer:delegated
+#    ports:
+#      - "8081:80"
+#      - "4344:443"
+    environment:
+      VOLUME: /app
+
+      # App
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_HOME: /app
+      # Optional: helps some images generate correct server_name defaults
+      APP_DOMAIN: proxy.jdw.local
+
+      PHP_IDE_CONFIG: serverName=proxy.jdw.local
+      XDEBUG_PORT: 9003
+      XDEBUG_CONFIG: client_host=${HOST_ADDRESS} client_port=9003 mode=debug start_with_request=yes discover_client_host=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.10
+    links:
+      - mysql
+      - redis
+
+  # Php Prj
+  auth-service:
+    container_name: auth-service.jdw
+    hostname: auth.jdw.local
+    build:
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+      context: ./builds/auth_service
+    user: $USER_ID
+    volumes:
+      - $AUTH_PATH:/app:cached
+      - .bash_history/.auth_service_history:/home/app/.bash_history:delegated
+      - ~/.config/composer:/root/.config/composer:delegated
+#    ports:
+#      - "8082:80"
+#      - "4345:443"
+    environment:
+      VOLUME: /app
+
+      # App
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_HOME: /app
+      # Optional: helps some images generate correct server_name defaults
+      APP_DOMAIN: auth.jdw.local
+
+      PHP_IDE_CONFIG: serverName=auth.jdw.local
+      XDEBUG_PORT: 9003
+      XDEBUG_CONFIG: client_host=${HOST_ADDRESS} client_port=9003 mode=debug start_with_request=yes discover_client_host=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.20
+    links:
+      - mysql
+      - redis
+
+  # Node prj
+  auth-users:
+    container_name: auth-users.jdw
+    hostname: users.jdw.local
+    build:
+      context: ./builds/auth-users
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+    user: $USER_ID
+    entrypoint: "/etc/entrypoint.sh"
+    tty: true
+    volumes:
+      - $AUTH_APP_PATH:/app:cached
+      - .bash_history/.auth_users_history:/home/app/.bash_history:delegated
+    depends_on:
+      auth-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    links:
+      - auth-service
+      - redis
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.30
+
+
+  ###
+  # Projects
+  ###
+
+  # Php Prj
+  api:
+    container_name: api.jdw
+    hostname: api.jdw.local
+    build:
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+      context: ./builds/manager-api
+    user: $USER_ID
+    volumes:
+      - $API_MANAGER_PATH:/app:cached
+      - .bash_history/.api_history:/home/app/.bash_history:delegated
+      - ~/.config/composer:/root/.config/composer:delegated
+#    ports:
+#      - "8080:80"
+#      - "4343:443"
+    environment:
+      VOLUME: /app
+
+      # App
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_HOME: /app
+      # Optional: helps some images generate correct server_name defaults
+      APP_DOMAIN: api.jdw.local
+
+
+      PHP_IDE_CONFIG: serverName=api.jwd.local
+      XDEBUG_PORT: 9003
+      XDEBUG_CONFIG: client_host=${HOST_ADDRESS} client_port=9003 mode=debug start_with_request=yes discover_client_host=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.101
+    links:
+      - mysql
+      - redis
+
+  # Node Prj
+  app:
+    container_name: app.jdw
+    hostname: app.jdw.local
+    build:
+      context: ./builds/manager-app
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+    user: $USER_ID
+    tty: true
+    entrypoint: "/etc/entrypoint.sh"
+    volumes:
+      - $APP_MANAGER_PATH:/app:cached
+      - .bash_history/.app_history:/home/app/.bash_history:delegated
+    depends_on:
+      auth-service:
+        condition: service_started
+    links:
+      - api
+      - auth-service
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.102
+
+  # Php Prj
+  payment:
+    container_name: payment.jdw
+    hostname: payment.jdw.local
+    build:
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+      context: ./builds/payment-api
+    user: $USER_ID
+    volumes:
+      - $PAYMENT_PATH:/app:cached
+      - .bash_history/.payment_history:/home/app/.bash_history:delegated
+      - ~/.config/composer:/root/.config/composer:delegated
+    #    ports:
+    #      - "8080:80"
+    #      - "4343:443"
+    environment:
+      VOLUME: /app
+
+      # App
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_HOME: /app
+      # Optional: helps some images generate correct server_name defaults
+      APP_DOMAIN: payment.jdw.local
+
+      PHP_IDE_CONFIG: serverName=payment.jwd.local
+      XDEBUG_PORT: 9003
+      XDEBUG_CONFIG: client_host=${HOST_ADDRESS} client_port=9003 mode=debug start_with_request=yes discover_client_host=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dynamodb:
+        condition: service_healthy
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.103
+    links:
+      - mysql
+      - redis
+      - dynamodb
