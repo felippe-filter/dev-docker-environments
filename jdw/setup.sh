@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-containers=("proxy" "auth_service" "auth_users" "api" "app" "mysql" "payment")
+containers=("proxy" "auth_service" "auth_users" "api" "app" "mysql" "payment" "customer_app")
 historyFolderPath=.bash_history
 
 if [ ! -d $historyFolderPath ]; then

@@ -16,6 +16,11 @@ volumes:
   dynamodb.local:
     driver: local
 
+secrets:
+  # Customer App - Define the Ionic Enterprise Key (ENT_NATIVE_KEY) on your local environment as describe on the README
+  ionic_ent_key:
+    environment: "ENT_NATIVE_KEY"
+
 services:
   ###
   # Resources
@@ -344,3 +349,33 @@ services:
       - mysql
       - redis
       - dynamodb
+
+  customer-app:
+    container_name: customer-app.jdw
+    hostname: pwa.jdw.local
+    build:
+      context: ./builds/customer-app
+      args:
+        USER_ID: $USER_ID
+        GROUP_ID: $GROUP_ID
+    user: $USER_ID
+    tty: true
+    entrypoint: "/etc/entrypoint.sh"
+    volumes:
+      - $CUSTOMER_APP_PATH:/app:cached
+      - .bash_history/.customer-app_history:/home/node/.bash_history:delegated
+      - ~/.ssh:/home/node/.ssh:delegated
+    secrets:
+      - ionic_ent_key
+    depends_on:
+      payment:
+        condition: service_started
+      proxy-cache:
+        condition: service_started
+    links:
+      - payment
+      - proxy-cache
+    networks:
+      jdw-local:
+        ipv4_address: 175.10.0.104
+
