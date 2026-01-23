@@ -367,6 +367,8 @@ services:
       - ~/.ssh:/home/node/.ssh:delegated
     secrets:
       - ionic_ent_key
+    environment:
+      APP_PORT: 443
     depends_on:
       payment:
         condition: service_started
